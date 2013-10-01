@@ -1,0 +1,66 @@
+var system = require('system'),
+	fs = require('fs'),
+	server = require('webserver').create(),
+	port = system.args[1] || 8080,
+	timeout = system.args[2] || 1000;
+
+var service = server.listen(port, function(request, response) {
+	var page = require('webpage').create();
+
+	page.open(request.post.url, function () {
+		page.injectJs('injected.js');
+
+		waitFor({
+			debug: true,
+			interval: 0,
+			timeout: 1000,
+			check: function () {
+				return page.evaluate(function() {
+					if (window.ServerRenderingWaitFor) {
+						return window.ServerRenderingWaitFor() && typeof window.ServerRenderingCSS !== 'undefined';
+					} else {
+						return typeof window.ServerRenderingCSS !== 'undefined';
+					}
+				});
+			},
+			success: function () {
+				var contents = page.evaluate(function() {
+					return {html: document.body.parentElement.innerHTML, css: window.ServerRenderingCSS || ''};
+				});
+
+				response.statusCode = 200;
+				response.setHeader('Content-Type', 'text/html');
+				contents.html = contents.html.replace(/\<script[^\>]*\>[^]*?\<\/script\>/ig, '').replace(/[\r\n]/g, '');
+				contents.html = '<html><style type="text/css">' + contents.css + '</style>' + contents.html + '</html>';
+				response.write(contents.html);
+				response.close();
+				page.close();
+
+			},
+			error: function () {
+				response.statusCode = 408;
+				response.close();
+				page.close();
+			}
+		});
+	});
+});
+
+console.log('ready');
+
+function waitFor ($config, _start) {
+	$config._start = $config._start || new Date();
+
+	if ($config.timeout && new Date - $config._start > $config.timeout) {
+		if ($config.error) $config.error();
+		if ($config.debug) console.log('timedout ' + (new Date - $config._start) + 'ms');
+		return;
+	}
+
+	if ($config.check()) {
+		if ($config.debug) console.log('success ' + (new Date - $config._start) + 'ms');
+		return $config.success();
+	}
+
+	setTimeout(waitFor, $config.interval || 0, $config);
+}
